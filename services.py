@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 import logging
+import json
 
-from openai import APITimeoutError, APIConnectionError, RateLimitError, OpenAI
+import httpx
 from langchain_core.documents import Document
 
 from core.config import AppConfig
@@ -25,11 +26,6 @@ class ChatResult:
 class KnowledgeService:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self.client = OpenAI(
-            base_url=config.openrouter_base_url,
-            api_key=config.openrouter_api_key,
-            timeout=config.timeout_seconds,
-        )
         self.vector_store = KnowledgeBaseManager(config).load_index()
 
     def _trim_history(self, history: Sequence[dict[str, str]] | None) -> list[dict[str, str]]:
@@ -68,17 +64,45 @@ class KnowledgeService:
             {"role": "user", "content": question},
         ]
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.config.model_name,
-                messages=messages,
-            )
-        except (APITimeoutError, APIConnectionError, RateLimitError) as exc:
-            raise ModelRequestError(f"Errore nella chiamata al modello: {exc}") from exc
-        except Exception as exc:  # pragma: no cover - fallback robusto
-            raise ModelRequestError(f"Errore generico nella chiamata al modello: {exc}") from exc
+        endpoint = f"{self.config.openrouter_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.config.model_name,
+            "messages": messages,
+        }
 
-        raw_response = response.choices[0].message.content if response.choices else ""
+        try:
+            response = httpx.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=self.config.timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except httpx.TimeoutException as exc:
+            raise ModelRequestError(f"Timeout nella chiamata al modello: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            details = ""
+            try:
+                error_payload = exc.response.json()
+                details = error_payload.get("error", {}).get("message") or str(error_payload)
+            except json.JSONDecodeError:
+                details = exc.response.text
+            raise ModelRequestError(
+                f"Errore HTTP {exc.response.status_code} da OpenRouter: {details}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ModelRequestError(f"Errore di rete nella chiamata al modello: {exc}") from exc
+        except ValueError as exc:
+            raise ModelRequestError(f"Risposta JSON non valida da OpenRouter: {exc}") from exc
+
+        choices = data.get("choices", [])
+        message = choices[0].get("message", {}) if choices else {}
+        raw_response = message.get("content", "")
         if not raw_response:
             raise ResponseParseError("Risposta vuota dal modello.")
 

@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .db/
-db_engine/
+db_engine/*
+!db_engine/.gitkeep
 .streamlit/
 .ipynb_checkpoints/

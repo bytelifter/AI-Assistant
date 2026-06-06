@@ -23,7 +23,7 @@ Architettura RAG modulare per interrogare rapidamente i documenti aziendali pres
 
 ### Embeddings
 
-Il progetto non usa OpenAI per gli embeddings. Usa un modello locale basato su `sentence-transformers`.
+Il progetto usa embeddings locali basati su `sentence-transformers`.
 
 ## Avvio
 
